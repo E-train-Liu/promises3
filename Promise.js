@@ -88,14 +88,14 @@
         var definePropertyUsable;
         try {
             Object.defineProperty(new Error(), "test", {
-                get: function() {return []},
+                get: function () { return [] },
                 configurable: true,
                 enumerable: false,
                 writable: true
             });
             definePropertyUsable = true;
         }
-        catch(error) {
+        catch (error) {
             definePropertyUsable = false;
         }
 
@@ -114,7 +114,7 @@
             Error.call(this, message);
 
             var errorArray = iterableToArray(errors);
-            
+
             if (definePropertyUsable)
                 Object.defineProperty(this, "[[errors]]", {
                     value: errorArray,
@@ -129,7 +129,7 @@
         AggregateError.prototype = new Error();
         AggregateError.prototype.constructor = AggregateError;
 
-        if(definePropertyUsable) {
+        if (definePropertyUsable) {
             Object.defineProperty(AggregateError.prototype, "errors", {
                 get: function () {
                     return this["[[errors]]"].slice();
@@ -214,21 +214,21 @@
         );
     }
 
-    Promise.race = function(promise) {
+    Promise.race = function (promise) {
         var promiseArray = iterableToArray(promises);
-        return new Promises (
+        return new Promises(
             curryTenary(raceExecutor, promiseArray)
         )
     }
 
-    Promise.reject = function(reason) {
-        return new Promise (function (resolve, reject) {
+    Promise.reject = function (reason) {
+        return new Promise(function (resolve, reject) {
             reject(reason);
         });
     }
 
-    Promise.resolve = function(value) {
-        return new Promise (function (resolve, reject) {
+    Promise.resolve = function (value) {
+        return new Promise(function (resolve, reject) {
             resolve(value);
         });
     }
@@ -303,7 +303,7 @@
      * @param {any} value 
      */
     function fulfill(promise, value) {
-        
+
         if (promise["[[status]]"] !== "pending")
             return;
 
@@ -461,7 +461,7 @@
                 else
                     onFulfilledAt(i, promise);
             }
-            catch(error) {
+            catch (error) {
                 onRejectedAt(i, error);
             }
         }
@@ -597,28 +597,43 @@
      * Call a function asynchronizely.
      * It will be run only when the task stack of JS engine is empty.
      * 
+     * For performance, see https://promisesaplus.com/#point-67
+     * 
+     * @function
+     * @type {(
+     *      func: (...args: any) => void,
+     *      ...args: any
+     * ) => number}
      * @param {(...args: any) => void} func
      * @param {...any} args
      */
-    function invokeFunctionAsync(func, args) {
-        // Optimization for function with 0, 1 and 3 argument(s) 
-        // since we only use these 3 conditions. 
-        switch(arguments.length) {
-            case 4:
-                setTimeout(func, 0, arguments[1], arguments[2], arguments[3]);
-                break;
-            case 2:
-                setTimeout(func, 0, arguments[1]);
-                break;
-            case 1:
-                setTimeout(func, 0);
-                break;
-            case 0:
-                throw new TypeError("No function passed as parameter");
-            default:
-                var argArray = Array.prototype.slice.call(arguments);
-                argArray.splice(1, 0, 0);
-                setTimeout.apply(this, argArray);
+    var invokeFunctionAsync;
+
+    // NodeJS process.nextTick
+    if (typeof process === "object" && typeof process.nextTick === "function")
+        invokeFunctionAsync = process.nextTick;
+    // Browsers: Window.setImmediate
+    else if (typeof setImmediate === "function")
+        invokeFunctionAsync = setImmediate;
+    // Otherwise, implement by ourselves
+    else {
+        invokeFunctionAsync = function (func, args) {
+            // Optimization for function with 0, 1 and 3 argument(s) 
+            // since we only use these 3 conditions. 
+            switch (arguments.length) {
+                case 4:
+                    return setTimeout(func, 0, arguments[1], arguments[2], arguments[3]);
+                case 2:
+                    return setTimeout(func, 0, arguments[1]);
+                case 1:
+                    return setTimeout(func, 0);
+                case 0:
+                    throw new TypeError("No function passed as parameter");
+                default:
+                    var argArray = Array.prototype.slice.call(arguments);
+                    argArray.splice(1, 0, 0);
+                    return setTimeout.apply(this, argArray);
+            }
         }
     }
 
@@ -709,7 +724,7 @@
 
 
 
-    
+
     /* Export */
 
     return {
