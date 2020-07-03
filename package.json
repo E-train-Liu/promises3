@@ -4,8 +4,11 @@
   "description": "A Promise A+ implementation for ES3.",
   "main": "Promise.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "promise-aplus-test": "promises-aplus-tests test/promise-aplus/nodejs/promise-aplus-adapter.js"
   },
   "author": "Yichen Liu",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "promises-aplus-tests": "*"
+  }
 }
