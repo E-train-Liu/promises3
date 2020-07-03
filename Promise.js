@@ -28,6 +28,14 @@
 
     /* Constructor */
 
+    /**
+     * Construct a `Promise` object.
+     * 
+     * @param {(
+     *      resolve: (value: any) => void,
+     *      reject: (reason: any) => void
+     * ) => void} executor 
+     */
     function Promise(executor) {
 
         if (!(this instanceof Promise))
@@ -150,6 +158,13 @@
 
     /* Member Functions */
 
+    /**
+     * Chain the current `Promise`. Define the callback to
+     * be invoked when the current `Promise` is fulfilled or rejected.
+     * 
+     * @param {(value: any) => void} onFulfilled 
+     * @param {(reason: any) => void} onRejected 
+     */
     Promise.prototype.then = function (onFulfilled, onRejected) {
         var returnedPromise = new Promise(emptyExecutor);
 
@@ -173,10 +188,21 @@
         return returnedPromise;
     }
 
+    /**
+     * Define callback to be invoked when the current `Promise` is rejected.
+     * 
+     * @param {(reason: any) => void} onRejected 
+     */
     Promise.prototype.catch = function (onRejected) {
         return this.then(undefined, onRejected);
     }
 
+    /**
+     * Define callback to be invoked when the current `Promise` is
+     * either fulfilled or rejected.
+     * 
+     * @param {(value: any) => void} onFinally 
+     */
     Promise.prototype.finally = function (onFinally) {
         return this.then(onFinally, onFinally);
     }
@@ -193,6 +219,16 @@
 
     /* Static Functions */
 
+    /**
+     * Take an iterable consist of `Promise`, `Thenable` or value.
+     * Return a single `Promise`.
+     * 
+     * The returned `Promise` will be fulfilled when all inputs are fulfilled 
+     * and will be rejected if any of the input is rejected.
+     * 
+     * @param {Iterable} promises 
+     * @returns {Promise}
+     */
     Promise.all = function (promises) {
         var promiseArray = iterableToArray(promises);
         return new Promise(
@@ -200,6 +236,16 @@
         );
     }
 
+    /**
+     * Take an iterable consist of `Promise`, `Thenable` or value.
+     * Return a single `Promise`.
+     * 
+     * The returned `Promise` will be fulfilled when all inputs are
+     * either fulfilled or rejected. 
+     * 
+     * @param {Iterable} promises
+     * @returns {Promise}
+     */
     Promise.allSettled = function (promises) {
         var promiseArray = iterableToArray(promises);
         return new Promise(
@@ -207,6 +253,16 @@
         );
     }
 
+    /**
+     * Take an iterable consist of `Promise`, `Thenable` or value.
+     * Return a single `Promise`.
+     * 
+     * The returned `Promise` will be fulfilled when any of the input is fulfilled 
+     * and will be rejected if all of the inputs are rejected.
+     * 
+     * @param {Iterable} promises
+     * @returns {Promise}
+     */
     Promise.any = function (promises) {
         var promiseArray = iterableToArray(promises);
         return new Promise(
@@ -214,6 +270,16 @@
         );
     }
 
+    /**
+     * Take an iterable consist of `Promise`, `Thenable` or value.
+     * Return a single `Promise`.
+     * 
+     * The returned `Promise` will be fulfilled when any of the input is first fulfilled 
+     * and will be rejected if any of the input is first rejected.
+     * 
+     * @param {Iterable} promises
+     * @returns {Promise}
+     */
     Promise.race = function (promise) {
         var promiseArray = iterableToArray(promises);
         return new Promises(
@@ -221,12 +287,24 @@
         )
     }
 
+    /**
+     * Return a `Promise` rejected by `reason`.
+     * 
+     * @param {any} reason
+     * @return {Promise} 
+     */
     Promise.reject = function (reason) {
         return new Promise(function (resolve, reject) {
             reject(reason);
         });
     }
 
+    /**
+     * Return a `Promise` resolved by `value`.
+     * 
+     * @param {any} value
+     * @return {Promise} 
+     */
     Promise.resolve = function (value) {
         return new Promise(function (resolve, reject) {
             resolve(value);
