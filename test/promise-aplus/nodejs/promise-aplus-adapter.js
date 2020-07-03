@@ -22,7 +22,7 @@ function deferred() {
 }
 
 module.exports = {
-    resolve: promises3.Promise.resolve,
-    reject: promises3.Promise.reject,
+    resolved: promises3.Promise.resolve,
+    rejected: promises3.Promise.reject,
     deferred: deferred
 };
