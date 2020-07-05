@@ -216,7 +216,7 @@
     Promise.all = function (promises) {
         var promiseArray = iterableToArray(promises);
         return new Promise(
-            curryTenary(allExecutor, promiseArray)
+            curry(allExecutor, promiseArray)
         );
     }
 
@@ -233,7 +233,7 @@
     Promise.allSettled = function (promises) {
         var promiseArray = iterableToArray(promises);
         return new Promise(
-            curryTenary(allSettledExecutor, promiseArray)
+            curry(allSettledExecutor, promiseArray)
         );
     }
 
@@ -250,7 +250,7 @@
     Promise.any = function (promises) {
         var promiseArray = iterableToArray(promises);
         return new Promise(
-            curryTenary(anyExecutor, promiseArray)
+            curry(anyExecutor, promiseArray)
         );
     }
 
@@ -267,7 +267,7 @@
     Promise.race = function (promise) {
         var promiseArray = iterableToArray(promises);
         return new Promises(
-            curryTenary(raceExecutor, promiseArray)
+            curry(raceExecutor, promiseArray)
         )
     }
 
@@ -327,8 +327,8 @@
         //      fulfilled or rejected following `value`
         if (value instanceof Promise) {
             value.then(
-                curryBinary(resolve, promise),
-                curryBinary(reject, promise)
+                curry(resolve, promise),
+                curry(reject, promise)
             );
             return;
         }
@@ -336,7 +336,6 @@
         // https://promisesaplus.com/#point-54
         //      For Thenable.
         var then = null;
-        var promiseOnceOperations = null;
         try {
             if ((typeof value === "object" || typeof value === "function") 
                 && value !== null
@@ -564,13 +563,10 @@
      * 
      * @param {any} reason
      */
-    var reportUnhandledRejection;
-    if (typeof console !== "undefined" && console !== null && console.warn)
-        reportUnhandledRejection = function (reason) {
+    function reportUnhandledRejection(reason) {
+        if (typeof console !== "undefined" && console !== null && console.warn)
             console.warn("Unhandled Promise rejection: ", reason);
-        }
-    else
-        reportUnhandledRejection = function() {}
+    }
 
 
 
@@ -600,8 +596,8 @@
             try {
                 if (promise != null && typeof promise.then === "function")
                     promise.then(
-                        curryBinary(onFulfilledAt, i),
-                        curryTenary(onRejectedAt, i)
+                        curry(onFulfilledAt, i),
+                        curry(onRejectedAt, i)
                     );
                 else
                     onFulfilledAt(i, promise);
@@ -755,16 +751,21 @@
     var invokeFunctionAsync;
 
     // NodeJS process.nextTick
-    if (typeof process === "object" && typeof process.nextTick === "function")
+    //      See method of checking whether the `process` is NodeJS's used in q
+    //      at https://github.com/kriskowal/q/blob/master/q.js#L184
+    if (typeof process === "object" 
+        && process.toString() === "[object process]" 
+        && typeof process.nextTick === "function"
+    )
         invokeFunctionAsync = process.nextTick;
-    // Browsers: Window.setImmediate
+    // Some browsers: `setImmediate()`
     else if (typeof setImmediate === "function")
-        invokeFunctionAsync = function() {
+        invokeFunctionAsync = function (func) {
             setImmediate.apply(this, arguments);
         }
-    // Otherwise, implement by ourselves
+    // Otherwise, implement by `setTimeout()`
     else {
-        invokeFunctionAsync = function (func, args) {
+        invokeFunctionAsync = function (func) {
             // Optimization for function with 0, 1 and 3 argument(s) 
             // since we only use these 3 conditions. 
             switch (arguments.length) {
@@ -780,9 +781,13 @@
                 case 0:
                     throw new TypeError("No function passed as parameter");
                 default:
-                    var argArray = Array.prototype.slice.call(arguments);
-                    argArray.splice(1, 0, 0);
-                    setTimeout.apply(this, argArray);
+                    var argCount = arguments.length;
+                    var argArray = new Array(argCount + 1);
+                    for (var i = 1; i < argCount; ++i)
+                        argArray[i + 1] = arguments[i];
+                    argArray[0] = func;
+                    argArray[1] = 0;
+                    setTimeout.apply(undefined, argArray);
             }
         }
     }
@@ -824,6 +829,37 @@
         }
     }
 
+    /**
+     * Fixes the first parameter of a function.
+     * 
+     * Takes a function `func` which have several arguments `arg1`, `arg2`, ...  
+     * Returns a curried function `curriedFunc`. Calling `curriedFunc(arg1, arg2, ...)` 
+     * is equivalent to calling `func(arg0, arg1, arg2, ...)`.
+     * 
+     * Currying is a concept in funcational programming. For currying, 
+     * see https://en.wikipedia.org/wiki/Currying and https://javascript.info/currying-partials.
+     * 
+     * @param {Function} func 
+     * @param {any} arg1
+     * @returns {Function}
+     */
+    function curry(func, arg0) {
+        return function() {
+            // Optimization when called with 0-2 arguments
+            // Because we currently only use these cases.
+            switch(arguments.length) {
+                case 2:
+                    return func(arg0, arguments[0], arguments[1]);
+                case 1:
+                    return func(arg0, arguments[0]);
+                case 0:
+                    return func(arg0);
+                default:
+                    var argArray = prependArguments(arg0, arguments);
+                    func.apply(this, argArray);
+            }
+        }
+    }
 
     /**
      * 
