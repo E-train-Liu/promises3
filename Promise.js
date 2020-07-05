@@ -32,8 +32,8 @@
      * Construct a `Promise` object.
      * 
      * @param {(
-     *      resolve: (value: any) => void,
-     *      reject: (reason: any) => void
+     *      resolvePromise: (value?: any) => void,
+     *      rejectPromise: (reason?: any) => void
      * ) => void} executor 
      */
     function Promise(executor) {
@@ -44,30 +44,13 @@
             throw new TypeError("The argument of Promise constructor must be a function.");
 
 
-        /**
-         * @private
-         * @type {any}
-         */
+        /** @private @type {any} */
         this["[[value]]"] = undefined;
 
-        /**
-         * @private
-         * @type {"pending" | "fulfilled" | "rejected"}
-         */
+        /** @private @type {"pending" | "fulfilled" | "rejected"} */
         this["[[status]]"] = "pending";
 
-        /**
-         * If the promise have been resolved by a Thenable object.
-         * 
-         * When a promise is resolved by a Thenable, it will remain pending
-         * state until the Thenable is fullfilled or rejected. 
-         * 
-         * @private
-         * @type {boolean}
-         */
-        this["[[resolvedByThenable]]"] = false;
-
-        /**
+        /** 
          * @private
          * @type {{
          *      onFulfilled: any | (value: any) => any,
@@ -75,16 +58,16 @@
          *      returnedPromise: Promise     
          * }[]} 
          */
-        this["[[handlers]]"] = [];
+        this["[[thens]]"] = [];
 
+        /** @private @type {boolean} */
+        this["[[handled]]"] = false;
 
-        // Function.prototype.bind() is not ES3 function
-        // It have been polyfill on this["[[resolve]]"] and this["[[reject]]"].
-        // See code later.
-        executor(
-            curryBinary(resolve, this),
-            curryBinary(reject, this)
-        );
+        // Optimization for internally used `emptyExecutor`
+        if (executor === emptyExecutor)
+            return;
+
+        operatePromiseByExecutor(this, executor);
     }
 
 
@@ -144,7 +127,7 @@
                 },
                 configurable: true,
                 enumerable: false,
-                configurable: true
+                writable: true
             });
         }
     }
@@ -166,18 +149,19 @@
      * @param {(reason: any) => void} onRejected 
      */
     Promise.prototype.then = function (onFulfilled, onRejected) {
+        this["[[handled]]"] = true;
         var returnedPromise = new Promise(emptyExecutor);
 
         switch (this["[[status]]"]) {
             case "fulfilled":
-                invokeOnFulFilledCallback(onFulfilled, this["[[value]]"], returnedPromise);
+                invokeOnFulFilledCallbackAsync(onFulfilled, this["[[value]]"], returnedPromise);
                 break;
             case "rejected":
-                invokeOnRejectedCallback(onRejected, this["[[value]]"], returnedPromise);
+                invokeOnRejectedCallbackAsync(onRejected, this["[[value]]"], returnedPromise);
                 break;
             case "pending":
             default:
-                this["[[handlers]]"].push({
+                this["[[thens]]"].push({
                     onFulfilled: onFulfilled,
                     onRejected: onRejected,
                     returnedPromise: returnedPromise
@@ -294,7 +278,7 @@
      * @return {Promise} 
      */
     Promise.reject = function (reason) {
-        return new Promise(function (resolve, reject) {
+        return new Promise(function(resolve, reject) {
             reject(reason);
         });
     }
@@ -306,7 +290,7 @@
      * @return {Promise} 
      */
     Promise.resolve = function (value) {
-        return new Promise(function (resolve, reject) {
+        return new Promise(function(resolve, reject) {
             resolve(value);
         });
     }
@@ -321,21 +305,6 @@
     /* Helper Functions For Member Functions */
 
     /**
-     * Resolve a promise.
-     * 
-     * This function will do nothing if the promise have been resolved by a Thenable or Promise.
-     * 
-     * Algorithm and standard: https://promisesaplus.com/#the-promise-resolution-procedure
-     * 
-     * @param {Promise} promise  The promise to be resolve.
-     * @param {any | Thenable} value  The value used to resolve the promise.
-     */
-    function resolve(promise, value) {
-        if (!promise["[[resolvedByThenable]]"])
-            resolveUncheck(promise, value);
-    }
-
-    /**
      * Resolve a promise anyway without checking that if it have not been resolved by 
      * a Thenable or another Promise.
      * 
@@ -344,75 +313,104 @@
      * @param {Promise} promise  The promise to be resolve.
      * @param {any | Thenable} value  The value used to resolve the promise.
      */
-    function resolveUncheck(promise, value) {
+    function resolve(promise, value) {
 
         // https://promisesaplus.com/#point-48
         //      A Promise cannot be resolved with itself. 
-        if (promise === value)
-            throw new TypeError("Cannot resolve a promise with itself.");
+        if (promise === value) {
+            reject(promise, new TypeError("Cannot resolve a promise with itself."));
+            return;
+        }
 
+        // https://promisesaplus.com/#point-49
+        //      If `value` is a `Promise`, the current `promise` will be 
+        //      fulfilled or rejected following `value`
+        if (value instanceof Promise) {
+            value.then(
+                curryBinary(resolve, promise),
+                curryBinary(reject, promise)
+            );
+            return;
+        }
+
+        // https://promisesaplus.com/#point-54
+        //      For Thenable.
+        var then = null;
+        var promiseOnceOperations = null;
         try {
-            // https://promisesaplus.com/#point-49
-            // https://promisesaplus.com/#point-54
-            //      When `value` thenable or is another promise, `promise` will 
-            //      remain "pending" state until `value` is fulfilled or rejected.
-            // https://promisesaplus.com/#point-55
-            // https://promisesaplus.com/#point-60
-            //      If retriving or calling `value.then` cause an exception, reject `promise`.
-            if (value != null && typeof value.then === "function") {
-                result.then(
-                    curryBinary(resolveUncheck, promise),
-                    curryBinary(rejectUncheck, promise)
-                );
-                promise["[[resolvedByThenable]]"] = true;
-            }
+            if ((typeof value === "object" || typeof value === "function") 
+                && value !== null
+                && typeof (then = value.then) === "function"
+            )
+                operatePromiseByExecutor(promise, bind(then, value));
+            // https://promisesaplus.com/#point-63
+            // https://promisesaplus.com/#point-64
+            //      If `value` is not a object or a non-thenable object,
+            //      fulfill the `promise` with it as value. 
             else
                 fulfill(promise, value);
         }
         catch (error) {
+            // https://promisesaplus.com/#point-55
+            //      If retriving `value.then` cause an `exception`, reject `promise` with `exception`
             reject(promise, error);
         }
     }
 
     /**
-     * Fulfill a pending promise.
+     * Fulfill a pending promise without checking that if the 
+     * promise is pending and if it have been resolve by Thenable.
      * 
      * @param {Promise} promise 
      * @param {any} value 
      */
     function fulfill(promise, value) {
-
+        // Only pending `Promise` can be fulfilled.
         if (promise["[[status]]"] !== "pending")
             return;
 
         promise["[[value]]"] = value;
         promise["[[status]]"] = "fulfilled";
+        invokeFunctionAsync(invokeOnFulFilledCallbacks, promise);
+    }
 
-        var handlers = promise["[[handlers]]"];
-        var handlerCount = handlers.length;
-        for (var i = 0; i < handlerCount; ++i) {
-            var handler = handlers[i];
-            invokeOnFulFilledCallback(
-                handler.onFulfilled, value, handler.returnedPromise
-            );
+    /**
+     * Invoke all onFulfilled callbacks added to a `Promise` added by then().
+     * 
+     * Do nothing when no callbacks are added
+     * 
+     * @param {Promise} promise
+     */
+    function invokeOnFulFilledCallbacks(promise) {
+        var value = promise["[[value]]"];
+        var thens = promise["[[thens]]"];
+        var thenCount = thens.length;
+        for(var i = 0; i < thenCount; ++i) {
+            var then = thens[i];
+            invokeOnFulFilledCallbackAsync(then.onFulfilled, value, then.returnedPromise);
         }
     }
 
     /**
-     * Invoke an onFulfilled callback added by then().
+     * Invoke `onFulfilled` callback added by `then()` asynchronously
+     * when it is a function. 
      * 
-     * When `promise1.then()` was called, it will accept a 
+     * Resolve or reject the `returnedPromise` returned by then() according to
+     * the `onFulfilled`. 
+     * + If `onFulfilled` runs well, resolve the `returnedPromise` with the return value of `onFulfilled`.
+     * + If `onFulfilled` is not a function, resolve the `returnedPromise` with the value of current promise.
+     * + If `onFulfilled` throws an exception, reject `returnedPromise` with the exception
      * 
      * @param {any | (value: any) => any} onFulfilled 
      * @param {any} value 
-     * @param {Promise} nextPromise
+     * @param {Promise} returnedPromise
      */
-    function invokeOnFulFilledCallback(onFulfilled, value, returnedPromise) {
+    function invokeOnFulFilledCallbackAsync(onFulfilled, value, returnedPromise) {
         if (typeof onFulfilled === "function")
             // https://promisesaplus.com/#point-34
             //      The `onFulfilled` and `onRejected` callbacks must be called async.
             invokeFunctionAsync(
-                invokeThenCallback, onFulfilled, result, returnedPromise
+                invokeThenCallback, onFulfilled, value, returnedPromise
             );
         // https://promisesaplus.com/#point-43
         //      If `onFulfilled` is not a function. Resolve the next promise with
@@ -421,50 +419,63 @@
             resolve(returnedPromise, value);
     }
 
+
     /**
-     * Reject the promise with the given reason.
-     * 
-     * This function will do nothing if the promise have been resolved by a promise
+     * Reject the `promise` with given `reason`.
      * 
      * @param {Promise} promise 
      * @param {any} reason 
      */
     function reject(promise, reason) {
-        if (!promise["[[resolvedByThenable]]"])
-            rejectUncheck(promise, reason);
-    }
 
-    /**
-     * Reject the promise anyway with the given reason considerless that if
-     * the Promise have been resolved by a Thenable or another Promise.
-     * 
-     * @param {Promise} promise 
-     * @param {any} reason 
-     */
-    function rejectUncheck(promise, reason) {
+        // A promise can only be resolved when pending.
         if (promise["[[status]]"] !== "pending")
             return;
 
         promise["[[value]]"] = reason;
         promise["[[status]]"] = "rejected";
+        invokeFunctionAsync(invokeOnRejectedCallbacks, promise);
+    }
 
-        var handlers = promise["[[handlers]]"];
-        var handlerCount = handlers.length;
-        for (var i = 0; i < handlerCount; ++i) {
-            var handler = handlers[i];
-            invokeOnRejectedCallback(handler.onRejected, reason, handler.promise);
+    /**
+     * Invoke all onFulfilled callbacks added to a `Promise` added by then().
+     * 
+     * When then() is not called, then no callbacks are added. Throw the value of
+     * the current promise as an error.
+     * 
+     * @param {Promise} promise
+     * 
+     * @throws {any} Throws the value of `promise` when its `then()` not called.
+     */
+    function invokeOnRejectedCallbacks(promise) {
+        var reason = promise["[[value]]"];
+        var thens = promise["[[thens]]"];
+        var thenCount = thens.length;
+        
+        if(!promise["[[handled]]"])
+            reportUnhandledRejection(reason);
+
+        for(var i = 0; i < thenCount; ++i) {
+            var then = thens[i];
+            invokeOnRejectedCallbackAsync(then.onRejected, reason, then.returnedPromise);
         }
     }
 
     /**
-     * Check if the `onRejected` callback accepted by `then()` is a function.
-     * If it is, call it.
+     * Invoke `onRejected` callback added by `then()` asynchronously
+     * when it is a function. 
+     * 
+     * Resolve or reject the `returnedPromise` returned by then() according to
+     * the `onRejected`. 
+     * + If `onRejected` runs well, resolve the `returnedPromise` with the return value of `onRejected`.
+     * + If `onRejected` is not a function, reject the `returnedPromise` with the value of current promise.
+     * + If `onRejected` throws an exception, reject `returnedPromise` with the exception
      * 
      * @param {any | (value: any) => any} onFulfilled 
      * @param {any} reason 
-     * @param {Promise} nextPromise
+     * @param {Promise} returnedPromise
      */
-    function invokeOnRejectedCallback(onRejected, reason, returnedPromise) {
+    function invokeOnRejectedCallbackAsync(onRejected, reason, returnedPromise) {
         if (typeof onRejected === "function")
             // https://promisesaplus.com/#point-34
             //      The `onFulfilled` and `onRejected` callbacks must be called async.
@@ -504,6 +515,62 @@
             reject(returnedPromise, error);
         }
     }
+
+    /**
+     * Run an executor. Let the function `executor` to decide wthether resolve or
+     * reject the promise.
+     * 
+     * 2 functions, `resolvePromise()` and `rejectPromise()` will be pass to the `executor`.
+     * If they are called multiple times, only the first call will be valid.
+     * 
+     * If the executor throws `error`, `promise` will be rejected with `error`. The `error`
+     * won't be thrown out of the `operatePromiseByExecutor()` function.
+     * 
+     * @param {Promise} promise 
+     * @param {(
+     *      resolvePromise: (value?: any) => void,
+     *      rejectPromise: (reason?: any) => void
+     * ) => void} executor 
+     */
+    function operatePromiseByExecutor(promise, executor) {
+        var called = false;
+        function resolvePromise(value) {
+            if (!called) {
+                called = true;
+                resolve(promise, value);
+            }
+        }
+        function rejectPromise(reason) {
+            if (!called) {
+                called = true;
+                reject(promise, reason);
+            }
+        }
+
+        try {
+            executor(resolvePromise, rejectPromise);
+        }
+        catch (error) {
+            rejectPromise(error);
+        }
+    }
+
+    /**
+     * Report a Promise was rejected but not handled.
+     * Print warning on console.
+     * 
+     * @function
+     * @type {(reason: any) => void}
+     * 
+     * @param {any} reason
+     */
+    var reportUnhandledRejection;
+    if (typeof console !== "undefined" && console !== null && console.warn)
+        reportUnhandledRejection = function (reason) {
+            console.warn("Unhandled Promise rejection: ", reason);
+        }
+    else
+        reportUnhandledRejection = function() {}
 
 
 
@@ -681,7 +748,7 @@
      * @type {(
      *      func: (...args: any) => void,
      *      ...args: any
-     * ) => number}
+     * ) => void}
      * @param {(...args: any) => void} func
      * @param {...any} args
      */
@@ -692,7 +759,9 @@
         invokeFunctionAsync = process.nextTick;
     // Browsers: Window.setImmediate
     else if (typeof setImmediate === "function")
-        invokeFunctionAsync = setImmediate;
+        invokeFunctionAsync = function() {
+            setImmediate.apply(this, arguments);
+        }
     // Otherwise, implement by ourselves
     else {
         invokeFunctionAsync = function (func, args) {
@@ -700,24 +769,30 @@
             // since we only use these 3 conditions. 
             switch (arguments.length) {
                 case 4:
-                    return setTimeout(func, 0, arguments[1], arguments[2], arguments[3]);
+                    setTimeout(func, 0, arguments[1], arguments[2], arguments[3]);
+                    break;
                 case 2:
-                    return setTimeout(func, 0, arguments[1]);
+                    setTimeout(func, 0, arguments[1]);
+                    break
                 case 1:
-                    return setTimeout(func, 0);
+                    setTimeout(func, 0);
+                    break;
                 case 0:
                     throw new TypeError("No function passed as parameter");
                 default:
                     var argArray = Array.prototype.slice.call(arguments);
                     argArray.splice(1, 0, 0);
-                    return setTimeout.apply(this, argArray);
+                    setTimeout.apply(this, argArray);
             }
         }
     }
 
+
     /**
      * Curry a function which takes 2 parameter and fix its first argument.
      * Return the function which only need the 2nd argument. 
+     * 
+     * The number of arguments is fixed for performance reason.
      * 
      * For currying, see https://en.wikipedia.org/wiki/Currying and https://javascript.info/currying-partials.
      * 
@@ -736,6 +811,8 @@
      * Curry a function which takes 3 parameter and fix its first argument.
      * Return the function which only need the 2 later arguments
      * 
+     * The number of arguments is fixed for performance reason.
+     * 
      * @param {(arg1: T1, arg2: T2, arg3: T3) => T0} func  A function which requires3 arguments.
      * @param {T1} arg1  The first argument to be passed to `func`.
      * @returns {(arg2: T2, arg3: T3) => T0}  A new function will takes 1 argument. 
@@ -744,6 +821,49 @@
     function curryTenary(func, arg1) {
         return function (arg2, arg3) {
             return func(arg1, arg2, arg3);
+        }
+    }
+
+
+    /**
+     * 
+     * @param {any} arg0
+     * @param {IArguments | any[]} argArray 
+     * @returns {any[]} 
+     */
+    function prependArguments(arg0, argArray) {
+        var argCount = argArray.length;
+        var newArgArray = new Array(argCount + 1);
+        
+        newArgArray[0] = arg0;
+        for (var i = 0; i < argCount; ++i)
+            newArgArray[i + 1] = argArray[i];
+        
+        return newArgArray;
+    }
+
+    /**
+     * An incomplete polyfill of `Function.prototype.bind()`.
+     * 
+     * For performance reason, specifying fixed arguments is not allowed.
+     * 
+     * @function
+     * @type {(
+     *      func: Function,
+     *      thisArg: any,
+     * ) => Function}
+     */
+    var bind;
+    if (Function.prototype.bind) {
+        bind = function bind(func, thisArg) {
+            return func.bind(thisArg);
+        }
+    }
+    else {
+        bind = function bind(func, thisArg) {
+            return function () {
+                func.apply(thisArg, arguments);
+            }
         }
     }
 
@@ -772,9 +892,12 @@
             // Check that if `iterable` is Iterable.
             // Excepting Array, string or arguments because slice is quicker for them.
             if (typeof iterable[Symbol.iterator] === "function"
-                && !((Array.isArray && Array.isArray(iterableToArray)) || iterable instanceof Array)
-                && !(typeof iterable === "string" || iterable instanceof String)
-                && !(iterable.prototype === arguments.prototype)
+                // Optimization for Array, string and arguments 
+                && !(iterable instanceof Array
+                    || (typeof Array.isArray === "function" && Array.isArray(iterable))
+                    || typeof iterable === "string" || iterable instanceof String
+                    || typeof iterable.constructor === arguments.constructor
+                )
             ) {
                 var result = [];
                 var iterator = iterable[Symbol]();
@@ -789,7 +912,7 @@
             }
         }
     }
-    // Not Iterable.
+    // Before ES6, no `Iterable`.
     else {
         iterableToArray = function (iterable) {
             return Array.prototype.slice.apply(iterable);
