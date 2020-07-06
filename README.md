@@ -61,3 +61,8 @@ Can be used as:
 
 + In some ES3 browsers, if a object member's key is a JavaScript keyword, accessing it by operator `.` is not allowed. You can use `promise["catch"]` and `promise["finally"]` instead of `promise.catch` and `promise.finally`. Some tools, like [babel/plugin-transform-member-expression-literals](https://babeljs.io/docs/en/babel-plugin-transform-member-expression-literals) may help you covert these codes automatically.
 
+## License and Copyright
+
+MIT Licence. See [LICENSE.md](LICENSE.md).
+
+Copyright (c) 2020 Yichen Liu.
