@@ -3,7 +3,7 @@
  */
 
 
-const PromisEs3 = require("../../../Promise.js");
+const PromisEs3 = require("../../Promise.js");
 
 function deferred() {
     let resolve, reject;

@@ -1,14 +1,14 @@
 {
   "name": "promises3",
   "version": "0.1.0",
-  "description": "A Promise A+ implementation for ES3.",
+  "description": "A Promise/A+ implementation for ES3.",
   "main": "Promise.js",
   "scripts": {
-    "promise-aplus-test": "promises-aplus-tests test/promise-aplus/nodejs/promise-aplus-adapter.js"
+    "promise-aplus-test": "promises-aplus-tests test/promise-aplus/promise-aplus-adapter.js"
   },
   "author": "Yichen Liu",
   "license": "MIT",
   "devDependencies": {
-    "promises-aplus-tests": "*"
+    "promises-aplus-tests": "^2.1.2"
   }
 }
