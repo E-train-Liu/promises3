@@ -32,8 +32,8 @@
      * Construct a `Promise` object.
      * 
      * @param {(
-     *      resolvePromise: (value?: any) => void,
-     *      rejectPromise: (reason?: any) => void
+     *      resolve: (value?: any) => void,
+     *      reject: (reason?: any) => void
      * ) => void} executor 
      */
     function Promise(executor) {
@@ -67,7 +67,13 @@
         if (executor === emptyExecutor)
             return;
 
-        operatePromiseByExecutor(this, executor);
+        var once = new OncePromiseOperations(this);
+        try {
+            executor(once.resolve, once.reject);
+        }
+        catch (error) {
+            once.reject(error);
+        }
     }
 
 
@@ -278,7 +284,7 @@
      * @return {Promise} 
      */
     Promise.reject = function (reason) {
-        return new Promise(function(resolve, reject) {
+        return new Promise(function (resolve, reject) {
             reject(reason);
         });
     }
@@ -290,7 +296,7 @@
      * @return {Promise} 
      */
     Promise.resolve = function (value) {
-        return new Promise(function(resolve, reject) {
+        return new Promise(function (resolve, reject) {
             resolve(value);
         });
     }
@@ -311,14 +317,14 @@
      * Algorithm and standard: https://promisesaplus.com/#the-promise-resolution-procedure
      * 
      * @param {Promise} promise  The promise to be resolve.
-     * @param {any | Thenable} value  The value used to resolve the promise.
+     * @param {any | Thenable} [value]  The value used to resolve the promise.
      */
-    function resolve(promise, value) {
+    function resolvePromise(promise, value) {
 
         // https://promisesaplus.com/#point-48
         //      A Promise cannot be resolved with itself. 
         if (promise === value) {
-            reject(promise, new TypeError("Cannot resolve a promise with itself."));
+            rejectPromise(promise, new TypeError("Cannot resolve a promise with itself."));
             return;
         }
 
@@ -327,32 +333,42 @@
         //      fulfilled or rejected following `value`
         if (value instanceof Promise) {
             value.then(
-                curry(resolve, promise),
-                curry(reject, promise)
+                curry(resolvePromise, promise),
+                curry(rejectPromise, promise)
             );
             return;
         }
-
-        // https://promisesaplus.com/#point-54
-        //      For Thenable.
-        var then = null;
+ 
         try {
-            if ((typeof value === "object" || typeof value === "function") 
-                && value !== null
+            var then = null;
+            // https://promisesaplus.com/#point-54
+            //      For Thenable.
+            if (value !== null
+                && (typeof value === "object" || typeof value === "function")
                 && typeof (then = value.then) === "function"
-            )
-                operatePromiseByExecutor(promise, bind(then, value));
+            ) {
+                var once = new OncePromiseOperations(promise);
+                try {
+                    then.call(value, once.resolve, once.reject);
+                }
+                // https://promisesaplus.com/#point-60
+                //      If calling `then()` throw an error before
+                //      `onRejected` is called, reject the `promise`.
+                catch (error) {
+                    once.reject(error);
+                }
+            }     
             // https://promisesaplus.com/#point-63
             // https://promisesaplus.com/#point-64
             //      If `value` is not a object or a non-thenable object,
             //      fulfill the `promise` with it as value. 
             else
-                fulfill(promise, value);
+                fulfillPromise(promise, value);
         }
         catch (error) {
             // https://promisesaplus.com/#point-55
             //      If retriving `value.then` cause an `exception`, reject `promise` with `exception`
-            reject(promise, error);
+            rejectPromise(promise, error);
         }
     }
 
@@ -361,9 +377,9 @@
      * promise is pending and if it have been resolve by Thenable.
      * 
      * @param {Promise} promise 
-     * @param {any} value 
+     * @param {any} [value] 
      */
-    function fulfill(promise, value) {
+    function fulfillPromise(promise, value) {
         // Only pending `Promise` can be fulfilled.
         if (promise["[[status]]"] !== "pending")
             return;
@@ -384,7 +400,7 @@
         var value = promise["[[value]]"];
         var thens = promise["[[thens]]"];
         var thenCount = thens.length;
-        for(var i = 0; i < thenCount; ++i) {
+        for (var i = 0; i < thenCount; ++i) {
             var then = thens[i];
             invokeOnFulFilledCallbackAsync(then.onFulfilled, value, then.returnedPromise);
         }
@@ -415,7 +431,7 @@
         //      If `onFulfilled` is not a function. Resolve the next promise with
         //      the value of this promise.
         else
-            resolve(returnedPromise, value);
+            resolvePromise(returnedPromise, value);
     }
 
 
@@ -423,9 +439,9 @@
      * Reject the `promise` with given `reason`.
      * 
      * @param {Promise} promise 
-     * @param {any} reason 
+     * @param {any} [reason] 
      */
-    function reject(promise, reason) {
+    function rejectPromise(promise, reason) {
 
         // A promise can only be resolved when pending.
         if (promise["[[status]]"] !== "pending")
@@ -450,11 +466,11 @@
         var reason = promise["[[value]]"];
         var thens = promise["[[thens]]"];
         var thenCount = thens.length;
-        
-        if(!promise["[[handled]]"])
+
+        if (!promise["[[handled]]"])
             reportUnhandledRejection(reason);
 
-        for(var i = 0; i < thenCount; ++i) {
+        for (var i = 0; i < thenCount; ++i) {
             var then = thens[i];
             invokeOnRejectedCallbackAsync(then.onRejected, reason, then.returnedPromise);
         }
@@ -485,7 +501,7 @@
         //      If `onRejected` is not a function. Reject the next promise with
         //      the value of this promise.
         else
-            reject(returnedPromise, reason);
+            rejectPromise(returnedPromise, reason);
     }
 
 
@@ -505,52 +521,13 @@
             //      When `onFulfilled` or `onRejected` return a value, resolve
             //      the `Promise` returned by `then()` with the return value.
             var callbackReturnValue = callback(value);
-            resolve(returnedPromise, callbackReturnValue)
+            resolvePromise(returnedPromise, callbackReturnValue)
         }
         catch (error) {
             // https://promisesaplus.com/#point-42
             //      When `onFulfilled` or `onRejected` throws an exception, 
             //      reject the next `Promise`.
-            reject(returnedPromise, error);
-        }
-    }
-
-    /**
-     * Run an executor. Let the function `executor` to decide wthether resolve or
-     * reject the promise.
-     * 
-     * 2 functions, `resolvePromise()` and `rejectPromise()` will be pass to the `executor`.
-     * If they are called multiple times, only the first call will be valid.
-     * 
-     * If the executor throws `error`, `promise` will be rejected with `error`. The `error`
-     * won't be thrown out of the `operatePromiseByExecutor()` function.
-     * 
-     * @param {Promise} promise 
-     * @param {(
-     *      resolvePromise: (value?: any) => void,
-     *      rejectPromise: (reason?: any) => void
-     * ) => void} executor 
-     */
-    function operatePromiseByExecutor(promise, executor) {
-        var called = false;
-        function resolvePromise(value) {
-            if (!called) {
-                called = true;
-                resolve(promise, value);
-            }
-        }
-        function rejectPromise(reason) {
-            if (!called) {
-                called = true;
-                reject(promise, reason);
-            }
-        }
-
-        try {
-            executor(resolvePromise, rejectPromise);
-        }
-        catch (error) {
-            rejectPromise(error);
+            rejectPromise(returnedPromise, error);
         }
     }
 
@@ -579,31 +556,54 @@
 
     /**
      * To watch an array of `Promise`s, add the same fulfill and reject
-     * callback by `then()` on them.
+     * callback by `then()` on them. 
      * 
-     * If an element in the array with value `v` is not a promise, it will be seen as
-     * an promise being fulfilled with `v`.   
+     * `Thenable`s will also be watched. If some of the `Thenable` call `onFulfilled`
+     * or `onRejected` multiple times, only the first call will be reported.
      * 
-     * @param {any[]} promises 
+     * If an element in the array with value `v` is not a `Thenable`, it will be seen as
+     * an promise being fulfilled with `v`. 
+     * 
+     * @param {any[]} promiseArray 
      * @param {(index: number, value: any) => void} [onFulfilledAt]
      * @param {(index: number, reason: any) => void} [onRejectedAt]
      */
-    function watchPromises(promises, onFulfilledAt, onRejectedAt) {
-        var promiseCount = promises.length;
+    function watchPromiseArray(promiseArray, onFulfilledAt, onRejectedAt) {
+        var promiseCount = promiseArray.length;
+        var isPending = arrayFilledWith(true, promiseCount);
+
+        function onceOnFulfilledAt(index, value){
+            if (isPending[index]) {
+                isPending[index] = false;
+                onFulfilledAt(index, value);
+            }
+        }
+        function onceOnRejectedAt(index, reason){
+            if (isPending[index]) {
+                isPending[index] = false;
+                onRejectedAt(index, reason);
+            }
+        }
 
         for (var i = 0; i < promiseCount; ++i) {
-            var promise = promises[i];
+            var promise = promiseArray[i];
             try {
-                if (promise != null && typeof promise.then === "function")
-                    promise.then(
-                        curry(onFulfilledAt, i),
-                        curry(onRejectedAt, i)
+                var then = null;
+                if (promise !== null
+                    && (typeof promise === "object" || typeof promise === "function")
+                    && typeof (then = promise.then) === "function"
+                ) {
+                    then.call(
+                        promise, 
+                        curry(onceOnFulfilledAt, i), 
+                        curry(onceOnRejectedAt, i)
                     );
+                }
                 else
-                    onFulfilledAt(i, promise);
+                    onceOnFulfilledAt(i, promise);
             }
             catch (error) {
-                onRejectedAt(i, error);
+                onceOnRejectedAt(error);
             }
         }
     }
@@ -611,17 +611,19 @@
     /**
      * The executor to create the promise returned by `Promise.all()`.
      * 
-     * @param {any[]} promises 
-     * @param {(value: any[]) => void} resolvePromise
-     * @param {(reason: any) => void} rejectPromise 
+     * @param {any[]} promiseArray 
+     * @param {(value: any[]) => void} resolve
+     * @param {(reason: any) => void} reject 
      */
-    function allExecutor(promises, resolvePromise, rejectPromise) {
-        var unfulfilledCount = promises.length;
-        var values = new Array(promises.length);
+    function allExecutor(promiseArray, resolve, reject) {
+        var promiseCount = promiseArray.length;
+        var unfulfilledCount = promiseCount;
+        var values = new Array(promiseCount);
+        var isPendding = arrayFilledWith(true, promiseCount);
         var rejected = false;
 
         if (unfulfilledCount === 0) {
-            resolvePromise(values);
+            resolve(values);
             return;
         }
 
@@ -630,29 +632,30 @@
             if (--unfulfilledCount <= 0)
                 // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/all#Fulfillment
                 //      If all promises are fulfilled, the promise returned by `Promise.all()` should be fullfilled async.
-                invokeFunctionAsync(resolvePromise, values);
+                invokeFunctionAsync(resolve, values);
         }
         function onRejectedAt(index, reason) {
             if (!rejected) {
                 rejected = true;
-                invokeFunctionAsync(rejectPromise, reason);
+                invokeFunctionAsync(reject, reason);
             }
         }
-        watchPromises(onFulfilledAt, onRejectedAt);
+        watchPromiseArray(promiseArray, onFulfilledAt, onRejectedAt);
     }
 
     /**
      * The executor to create the promise returned by `Promise.allSettled()`.
      * 
-     * @param {any[]} promises 
-     * @param {(value: any[]) => void} resolvePromise
+     * @param {any[]} promiseArray 
+     * @param {(value: any[]) => void} resolve
+     * @param {(value: any[]) => void} resolve
      */
-    function allSettledExecutor(promises, resolvePromise, rejectPromise) {
-        var pendingCount = promises.length;
-        var values = new Array(promises.length);
+    function allSettledExecutor(promiseArray, resolve, reject) {
+        var pendingCount = promiseArray.length;
+        var values = new Array(promiseArray.length);
 
         if (pendingCount === 0) {
-            resolvePromise(values)
+            resolve(values)
             return;
         }
 
@@ -660,59 +663,59 @@
             values[index] = value;
             if (--pendingCount <= 0)
                 // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/allSettled#Return_value
-                invokeFunctionAsync(resolvePromise, values);
+                invokeFunctionAsync(resolve, values);
         }
-        watchPromises(promises, onSettledAt, onSettledAt);
+        watchPromiseArray(promiseArray, onSettledAt, onSettledAt);
     }
 
     /**
      * The executor to create the promise returned by `Promise.any()`.
      * 
-     * @param {Promise} promises 
-     * @param {(value: any) => void} onOneFulfilled 
-     * @param {(reason: AggregateError) => void} onAllRejected 
+     * @param {any[]} promiseArray 
+     * @param {(value: any) => void} resolve 
+     * @param {(reason: AggregateError) => void} reject 
      */
-    function anyExecutor(promises, onOneFulfilled, onAllRejected) {
-        var unrejectedCount = promises.length;
-        var reasons = new Array(promises.length);
+    function anyExecutor(promiseArray, resolve, reject) {
+        var unrejectedCount = promiseArray.length;
+        var reasons = new Array(promiseArray.length);
         var fulfilled = false;
 
         if (unrejectedCount === 0) {
-            onAllRejected(new AggregateError(reasons));
+            reject(new AggregateError(reasons));
             return;
         }
 
         function onFulfilledAt(index, value) {
             if (!fulfilled) {
                 fulfilled = true;
-                invokeFunctionAsync(onOneFulfilled, value);
+                invokeFunctionAsync(resolve, value);
             }
         }
         function onRejectedAt(index, reason) {
             reasons[index] = reason;
             if (--unrejectedCount <= 0)
-                invokeFunctionAsync(onAllRejected, new AggregateError(reasons));
+                invokeFunctionAsync(reject, new AggregateError(reasons));
         }
-        watchPromises(onFulfilledAt, onRejectedAt);
+        watchPromiseArray(onFulfilledAt, onRejectedAt);
     }
 
     /**
      * The executor to create the promise returned by `Promise.race()`.
      * 
-     * @param {Promise} promises 
-     * @param {(value: any) => void} onOneFulfilled 
-     * @param {(reason: AggregateError) => void} onAllRejected 
+     * @param {any} promiseArray 
+     * @param {(value: any) => void} resolve 
+     * @param {(reason: any) => void} reject
      */
-    function raceExecutor(promises, resolvePromise, rejectPromise) {
+    function raceExecutor(promiseArray, resolve, reject) {
         var settled = false;
 
         function onSettledAt(index, value) {
             if (!settled) {
                 settled = true;
-                invokeFunctionAsync(resolvePromise, value);
+                invokeFunctionAsync(resolve, value);
             }
         }
-        watchPromises(promises, onSettledAt, onSettledAt);
+        watchPromiseArray(promiseArray, onSettledAt, onSettledAt);
     }
 
     /**
@@ -720,8 +723,8 @@
      * 
      * By using this excutor, you can create a `Promise` which keeps pending.
      * 
-     * @param {(value: any) => void} resolve 
-     * @param {(reason: any) => void} reject 
+     * @param {(value?: any) => void} resolve
+     * @param {(reason?: any) => void} reject
      */
     function emptyExecutor(resolve, reject) { }
 
@@ -731,8 +734,49 @@
 
 
 
-
     /* Common Helper Functions */
+
+    /**
+     * Make a pair of functions `resolve` and `reject`, return an object
+     * `result` that contains the warpper functions of them, `result.resolve`
+     * and `result.reject`. These wrapper functions are once and mutex.
+     * 
+     * Which means
+     * + Once `result.resolve` is called, any call to `result.reject` will
+     *   be ignored. Vice versa.
+     * + If `result.resolve` are called multiple times, only the first call will
+     *   be accepted. This is also true for `result.reject`.
+     * 
+     * @param {Promise} promise
+     * 
+     */
+    function OncePromiseOperations(promise) {
+        var called = false;
+        
+        /**
+         * Resolve the `promise` if `this.resolve()` 
+         * and `this.reject()` have not been called.
+         * @param {any} [value] 
+         */
+        this.resolve = function resolve(value) {
+            if (!called) {
+                called = true;
+                resolvePromise(promise, value);
+            }
+        };
+
+        /**
+         * Reject the `promise` if `this.resolve()` 
+         * and `this.reject()` have not been called.
+         * @param {any} [reason]
+         */
+        this.reject = function reject(reason) {
+            if (!called) {
+                called = true;
+                rejectPromise(promise, reason);
+            }
+        };
+    }
 
     /**
      * Call a function asynchronizely.
@@ -750,210 +794,168 @@
      */
     var invokeFunctionAsync;
 
-    // NodeJS process.nextTick
-    //      See method of checking whether the `process` is NodeJS's used in q
-    //      at https://github.com/kriskowal/q/blob/master/q.js#L184
-    if (typeof process === "object" 
-        && process.toString() === "[object process]" 
-        && typeof process.nextTick === "function"
-    )
-        invokeFunctionAsync = process.nextTick;
-    // Some browsers: `setImmediate()`
-    else if (typeof setImmediate === "function")
-        invokeFunctionAsync = function (func) {
-            setImmediate.apply(this, arguments);
-        }
-    // Otherwise, implement by `setTimeout()`
-    else {
-        invokeFunctionAsync = function (func) {
-            // Optimization for function with 0, 1 and 3 argument(s) 
-            // since we only use these 3 conditions. 
-            switch (arguments.length) {
-                case 4:
-                    setTimeout(func, 0, arguments[1], arguments[2], arguments[3]);
-                    break;
-                case 2:
-                    setTimeout(func, 0, arguments[1]);
-                    break
-                case 1:
-                    setTimeout(func, 0);
-                    break;
-                case 0:
-                    throw new TypeError("No function passed as parameter");
-                default:
-                    var argCount = arguments.length;
-                    var argArray = new Array(argCount + 1);
-                    for (var i = 1; i < argCount; ++i)
-                        argArray[i + 1] = arguments[i];
-                    argArray[0] = func;
-                    argArray[1] = 0;
-                    setTimeout.apply(undefined, argArray);
-            }
-        }
+// NodeJS process.nextTick
+//      See method of checking whether the `process` is NodeJS's used in q
+//      at https://github.com/kriskowal/q/blob/master/q.js#L184
+if (typeof process === "object"
+    && process.toString() === "[object process]"
+    && typeof process.nextTick === "function"
+)
+    invokeFunctionAsync = process.nextTick;
+// Some browsers: `setImmediate()`
+else if (typeof setImmediate === "function")
+    invokeFunctionAsync = function (func) {
+        setImmediate.apply(this, arguments);
     }
-
-
-    /**
-     * Curry a function which takes 2 parameter and fix its first argument.
-     * Return the function which only need the 2nd argument. 
-     * 
-     * The number of arguments is fixed for performance reason.
-     * 
-     * For currying, see https://en.wikipedia.org/wiki/Currying and https://javascript.info/currying-partials.
-     * 
-     * @param {(arg1: T1, arg2: T2) => T0} func  A function which requires 2 arguments.
-     * @param {T1} arg1  The first argument to be passed to `func`.
-     * @returns {(arg2: T2) => T0}  A new function will takes 1 argument. 
-     *                              Calling it with `arg2` is equivalent to calling `func` with `(arg1, arg2)`
-     */
-    function curryBinary(func, arg1) {
-        return function (arg2) {
-            return func(arg1, arg2);
+// Otherwise, implement by `setTimeout()`
+else {
+    invokeFunctionAsync = function (func) {
+        // Optimization for function with 0, 1 and 3 argument(s) 
+        // since we only use these 3 conditions. 
+        switch (arguments.length) {
+            case 4:
+                setTimeout(func, 0, arguments[1], arguments[2], arguments[3]);
+                break;
+            case 2:
+                setTimeout(func, 0, arguments[1]);
+                break
+            case 1:
+                setTimeout(func, 0);
+                break;
+            case 0:
+                throw new TypeError("No function passed as parameter");
+            default:
+                var argCount = arguments.length;
+                var argArray = new Array(argCount + 1);
+                for (var i = 1; i < argCount; ++i)
+                    argArray[i + 1] = arguments[i];
+                argArray[0] = func;
+                argArray[1] = 0;
+                setTimeout.apply(undefined, argArray);
         }
     }
+}
 
-    /**
-     * Curry a function which takes 3 parameter and fix its first argument.
-     * Return the function which only need the 2 later arguments
-     * 
-     * The number of arguments is fixed for performance reason.
-     * 
-     * @param {(arg1: T1, arg2: T2, arg3: T3) => T0} func  A function which requires3 arguments.
-     * @param {T1} arg1  The first argument to be passed to `func`.
-     * @returns {(arg2: T2, arg3: T3) => T0}  A new function will takes 1 argument. 
-     *                                        Calling it with `arg2` is equivalent to calling `func` with `(arg1, arg2)`
-     */
-    function curryTenary(func, arg1) {
-        return function (arg2, arg3) {
-            return func(arg1, arg2, arg3);
+/**
+ * Fixes the first parameter of a function.
+ * 
+ * Takes a function `func` which have several arguments `arg1`, `arg2`, ...  
+ * Returns a curried function `curriedFunc`. Calling `curriedFunc(arg1, arg2, ...)` 
+ * is equivalent to calling `func(arg0, arg1, arg2, ...)`.
+ * 
+ * Currying is a concept in funcational programming. For currying, 
+ * see https://en.wikipedia.org/wiki/Currying and https://javascript.info/currying-partials.
+ * 
+ * @param {Function} func 
+ * @param {any} arg1
+ * @returns {Function}
+ */
+function curry(func, arg0) {
+    return function () {
+        // Optimization when called with 0-2 arguments
+        // Because we currently only use these cases.
+        switch (arguments.length) {
+            case 2:
+                return func(arg0, arguments[0], arguments[1]);
+            case 1:
+                return func(arg0, arguments[0]);
+            case 0:
+                return func(arg0);
+            default:
+                var argArray = prependArguments(arg0, arguments);
+                func.apply(this, argArray);
         }
     }
+}
 
-    /**
-     * Fixes the first parameter of a function.
-     * 
-     * Takes a function `func` which have several arguments `arg1`, `arg2`, ...  
-     * Returns a curried function `curriedFunc`. Calling `curriedFunc(arg1, arg2, ...)` 
-     * is equivalent to calling `func(arg0, arg1, arg2, ...)`.
-     * 
-     * Currying is a concept in funcational programming. For currying, 
-     * see https://en.wikipedia.org/wiki/Currying and https://javascript.info/currying-partials.
-     * 
-     * @param {Function} func 
-     * @param {any} arg1
-     * @returns {Function}
-     */
-    function curry(func, arg0) {
-        return function() {
-            // Optimization when called with 0-2 arguments
-            // Because we currently only use these cases.
-            switch(arguments.length) {
-                case 2:
-                    return func(arg0, arguments[0], arguments[1]);
-                case 1:
-                    return func(arg0, arguments[0]);
-                case 0:
-                    return func(arg0);
-                default:
-                    var argArray = prependArguments(arg0, arguments);
-                    func.apply(this, argArray);
-            }
+/**
+ * 
+ * @param {any} arg0
+ * @param {IArguments | any[]} argArray 
+ * @returns {any[]} 
+ */
+function prependArguments(arg0, argArray) {
+    var argCount = argArray.length;
+    var newArgArray = new Array(argCount + 1);
+
+    newArgArray[0] = arg0;
+    for (var i = 0; i < argCount; ++i)
+        newArgArray[i + 1] = argArray[i];
+
+    return newArgArray;
+}
+
+
+/**
+ * Convert an iterable object to an array.
+ * 
+ * See https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols.
+ * 
+ * @function
+ * @type {(iterable: Interable) => Array}
+ * 
+ * @throws {TypeError}  when the argument is not iterable.
+ */
+var iterableToArray;
+
+// ES6 with Array.from
+if (Array.from) {
+    iterableToArray = Array.from;
+}
+// Incomplete ES6. Iterable exists but Array.from is not implemented.
+else if (typeof Symbol === "function" && Symbol.iterator) {
+    iterableToArray = function (iterable) {
+        if (iterable == null)
+            throw TypeError("The argument should be iterable instead of null or undefined.");
+
+        // Check that if `iterable` is Iterable.
+        // Excepting Array, string or arguments because slice is quicker for them.
+        if (typeof iterable[Symbol.iterator] === "function"
+            // Optimization for Array, string and arguments 
+            && !(iterable instanceof Array
+                || (typeof Array.isArray === "function" && Array.isArray(iterable))
+                || typeof iterable === "string" || iterable instanceof String
+                || typeof iterable.constructor === arguments.constructor
+            )
+        ) {
+            var result = [];
+            var iterator = iterable[Symbol]();
+            var iteratorReturn;
+            while (!((iteratorReturn = iterator).done))
+                result.push(iteratorReturn.value);
+
+            return result;
         }
-    }
-
-    /**
-     * 
-     * @param {any} arg0
-     * @param {IArguments | any[]} argArray 
-     * @returns {any[]} 
-     */
-    function prependArguments(arg0, argArray) {
-        var argCount = argArray.length;
-        var newArgArray = new Array(argCount + 1);
-        
-        newArgArray[0] = arg0;
-        for (var i = 0; i < argCount; ++i)
-            newArgArray[i + 1] = argArray[i];
-        
-        return newArgArray;
-    }
-
-    /**
-     * An incomplete polyfill of `Function.prototype.bind()`.
-     * 
-     * For performance reason, specifying fixed arguments is not allowed.
-     * 
-     * @function
-     * @type {(
-     *      func: Function,
-     *      thisArg: any,
-     * ) => Function}
-     */
-    var bind;
-    if (Function.prototype.bind) {
-        bind = function bind(func, thisArg) {
-            return func.bind(thisArg);
-        }
-    }
-    else {
-        bind = function bind(func, thisArg) {
-            return function () {
-                func.apply(thisArg, arguments);
-            }
-        }
-    }
-
-    /**
-     * Convert an iterable object to an array.
-     * 
-     * See https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols.
-     * 
-     * @function
-     * @type {(iterable: Interable) => Array}
-     * 
-     * @throws {TypeError}  when the argument is not iterable.
-     */
-    var iterableToArray;
-
-    // ES6 with Array.from
-    if (Array.from) {
-        iterableToArray = Array.from;
-    }
-    // Incomplete ES6. Iterable exists but Array.from is not implemented.
-    else if (typeof Symbol === "function" && Symbol.iterator) {
-        iterableToArray = function (iterable) {
-            if (iterable == null)
-                throw TypeError("The argument should be iterable instead of null or undefined.");
-
-            // Check that if `iterable` is Iterable.
-            // Excepting Array, string or arguments because slice is quicker for them.
-            if (typeof iterable[Symbol.iterator] === "function"
-                // Optimization for Array, string and arguments 
-                && !(iterable instanceof Array
-                    || (typeof Array.isArray === "function" && Array.isArray(iterable))
-                    || typeof iterable === "string" || iterable instanceof String
-                    || typeof iterable.constructor === arguments.constructor
-                )
-            ) {
-                var result = [];
-                var iterator = iterable[Symbol]();
-                var iteratorReturn;
-                while (!((iteratorReturn = iterator).done))
-                    result.push(iteratorReturn.value);
-
-                return result;
-            }
-            else {
-                return Array.prototype.slice.apply(iterable);
-            }
-        }
-    }
-    // Before ES6, no `Iterable`.
-    else {
-        iterableToArray = function (iterable) {
+        else {
             return Array.prototype.slice.apply(iterable);
         }
     }
+}
+// Before ES6, no `Iterable`.
+else {
+    iterableToArray = function (iterable) {
+        return Array.prototype.slice.apply(iterable);
+    }
+}
+
+/**
+ * Return an array filled by `value`.
+ * 
+ * @param {T} value
+ * @param {number} length
+ * @returns {T[]}
+ */
+function arrayFilledWith(value, length) {
+    var array = new Array(length);
+
+    if (array.fill)
+        array.fill(value);
+    else
+        for (var i = 0; i < length; ++i)
+            array[i] = value;
+
+    return array;
+}
 
 
 
@@ -962,11 +964,11 @@
 
 
 
-    /* Export */
+/* Export */
 
-    return {
-        Promise: Promise,
-        AggregateError: AggregateError
-    };
+return {
+    Promise: Promise,
+    AggregateError: AggregateError
+};
 
-})());
+}) ());
