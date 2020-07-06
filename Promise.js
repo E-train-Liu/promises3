@@ -183,7 +183,7 @@
      * 
      * @param {(reason: any) => void} onRejected 
      */
-    Promise.prototype.catch = function (onRejected) {
+    Promise.prototype["catch"] = function (onRejected) {
         return this.then(undefined, onRejected);
     }
 
@@ -193,7 +193,7 @@
      * 
      * @param {(value: any) => void} onFinally 
      */
-    Promise.prototype.finally = function (onFinally) {
+    Promise.prototype["finally"] = function (onFinally) {
         return this.then(onFinally, onFinally);
     }
 
@@ -338,7 +338,7 @@
             );
             return;
         }
- 
+
         try {
             var then = null;
             // https://promisesaplus.com/#point-54
@@ -357,7 +357,7 @@
                 catch (error) {
                     once.reject(error);
                 }
-            }     
+            }
             // https://promisesaplus.com/#point-63
             // https://promisesaplus.com/#point-64
             //      If `value` is not a object or a non-thenable object,
@@ -572,13 +572,13 @@
         var promiseCount = promiseArray.length;
         var isPending = arrayFilledWith(true, promiseCount);
 
-        function onceOnFulfilledAt(index, value){
+        function onceOnFulfilledAt(index, value) {
             if (isPending[index]) {
                 isPending[index] = false;
                 onFulfilledAt(index, value);
             }
         }
-        function onceOnRejectedAt(index, reason){
+        function onceOnRejectedAt(index, reason) {
             if (isPending[index]) {
                 isPending[index] = false;
                 onRejectedAt(index, reason);
@@ -594,8 +594,8 @@
                     && typeof (then = promise.then) === "function"
                 ) {
                     then.call(
-                        promise, 
-                        curry(onceOnFulfilledAt, i), 
+                        promise,
+                        curry(onceOnFulfilledAt, i),
                         curry(onceOnRejectedAt, i)
                     );
                 }
@@ -752,7 +752,7 @@
      */
     function OncePromiseOperations(promise) {
         var called = false;
-        
+
         /**
          * Resolve the `promise` if `this.resolve()` 
          * and `this.reject()` have not been called.
@@ -794,168 +794,182 @@
      */
     var invokeFunctionAsync;
 
-// NodeJS process.nextTick
-//      See method of checking whether the `process` is NodeJS's used in q
-//      at https://github.com/kriskowal/q/blob/master/q.js#L184
-if (typeof process === "object"
-    && process.toString() === "[object process]"
-    && typeof process.nextTick === "function"
-)
-    invokeFunctionAsync = process.nextTick;
-// Some browsers: `setImmediate()`
-else if (typeof setImmediate === "function")
-    invokeFunctionAsync = function (func) {
-        setImmediate.apply(this, arguments);
+    // NodeJS process.nextTick
+    //      See method of checking whether the `process` is NodeJS's used in q
+    //      at https://github.com/kriskowal/q/blob/master/q.js#L184
+    if (typeof process === "object"
+        && process.toString() === "[object process]"
+        && typeof process.nextTick === "function"
+    )
+        invokeFunctionAsync = process.nextTick;
+    // Some browsers: `setImmediate()`
+    else if (typeof setImmediate === "function")
+        invokeFunctionAsync = function (func) {
+            setImmediate.apply(this, arguments);
+        }
+    // Otherwise, implement by `setTimeout()`
+    else {
+        // For IE 9 and earlier, `setTimeout` do not support additional arguments
+        invokeFunctionAsync = function (func) {
+            var argArray = Array.prototype.slice.call(arguments, 1);
+            setTimeout(function () {
+                func.apply(undefined, argArray);
+            }, 0);
+        }
+
+        // Detect if the `setTimeout` allow additional arguments.
+        setTimeout(function (canAddArg) {
+            if (!canAddArg)
+                return;
+            
+            // For modern browsers, `setTimeout` support additional arguments
+            // avoid creating closure and copying array.
+            invokeFunctionAsync = function (func) {
+                // Optimization for function with 0, 1 and 3 argument(s) 
+                // since we only use these 3 conditions. 
+                switch (arguments.length) {
+                    case 4:
+                        setTimeout(func, 0, arguments[1], arguments[2], arguments[3]);
+                        break;
+                    case 2:
+                        setTimeout(func, 0, arguments[1]);
+                        break
+                    case 1:
+                        setTimeout(func, 0);
+                        break;
+                    case 0:
+                        throw new TypeError("No function passed as parameter");
+                    default:
+                        var argArray = Array.prototype.slice.call(arguments);
+                        argArray.splice(1, 0, 0);
+                        setTimeout.apply(undefined, argArray);
+                }
+            }
+        }, 0, true);
+
+
     }
-// Otherwise, implement by `setTimeout()`
-else {
-    invokeFunctionAsync = function (func) {
-        // Optimization for function with 0, 1 and 3 argument(s) 
-        // since we only use these 3 conditions. 
-        switch (arguments.length) {
-            case 4:
-                setTimeout(func, 0, arguments[1], arguments[2], arguments[3]);
-                break;
-            case 2:
-                setTimeout(func, 0, arguments[1]);
-                break
-            case 1:
-                setTimeout(func, 0);
-                break;
-            case 0:
-                throw new TypeError("No function passed as parameter");
-            default:
-                var argCount = arguments.length;
-                var argArray = new Array(argCount + 1);
-                for (var i = 1; i < argCount; ++i)
-                    argArray[i + 1] = arguments[i];
-                argArray[0] = func;
-                argArray[1] = 0;
-                setTimeout.apply(undefined, argArray);
+
+    /**
+     * Fixes the first parameter of a function.
+     * 
+     * Takes a function `func` which have several arguments `arg1`, `arg2`, ...  
+     * Returns a curried function `curriedFunc`. Calling `curriedFunc(arg1, arg2, ...)` 
+     * is equivalent to calling `func(arg0, arg1, arg2, ...)`.
+     * 
+     * Currying is a concept in funcational programming. For currying, 
+     * see https://en.wikipedia.org/wiki/Currying and https://javascript.info/currying-partials.
+     * 
+     * @param {Function} func 
+     * @param {any} arg1
+     * @returns {Function}
+     */
+    function curry(func, arg0) {
+        return function () {
+            // Optimization when called with 0-2 arguments
+            // Because we currently only use these cases.
+            switch (arguments.length) {
+                case 2:
+                    return func(arg0, arguments[0], arguments[1]);
+                case 1:
+                    return func(arg0, arguments[0]);
+                case 0:
+                    return func(arg0);
+                default:
+                    var argArray = prependArguments(arg0, arguments);
+                    func.apply(this, argArray);
+            }
         }
     }
-}
 
-/**
- * Fixes the first parameter of a function.
- * 
- * Takes a function `func` which have several arguments `arg1`, `arg2`, ...  
- * Returns a curried function `curriedFunc`. Calling `curriedFunc(arg1, arg2, ...)` 
- * is equivalent to calling `func(arg0, arg1, arg2, ...)`.
- * 
- * Currying is a concept in funcational programming. For currying, 
- * see https://en.wikipedia.org/wiki/Currying and https://javascript.info/currying-partials.
- * 
- * @param {Function} func 
- * @param {any} arg1
- * @returns {Function}
- */
-function curry(func, arg0) {
-    return function () {
-        // Optimization when called with 0-2 arguments
-        // Because we currently only use these cases.
-        switch (arguments.length) {
-            case 2:
-                return func(arg0, arguments[0], arguments[1]);
-            case 1:
-                return func(arg0, arguments[0]);
-            case 0:
-                return func(arg0);
-            default:
-                var argArray = prependArguments(arg0, arguments);
-                func.apply(this, argArray);
+    /**
+     * 
+     * @param {any} arg0
+     * @param {IArguments | any[]} argArray 
+     * @returns {any[]} 
+     */
+    function prependArguments(arg0, argArray) {
+        var argCount = argArray.length;
+        var newArgArray = new Array(argCount + 1);
+
+        newArgArray[0] = arg0;
+        for (var i = 0; i < argCount; ++i)
+            newArgArray[i + 1] = argArray[i];
+
+        return newArgArray;
+    }
+
+
+    /**
+     * Convert an iterable object to an array.
+     * 
+     * See https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols.
+     * 
+     * @function
+     * @type {(iterable: Interable) => Array}
+     * 
+     * @throws {TypeError}  when the argument is not iterable.
+     */
+    var iterableToArray;
+
+    // ES6 with Array.from
+    if (Array.from) {
+        iterableToArray = Array.from;
+    }
+    // Incomplete ES6. Iterable exists but Array.from is not implemented.
+    else if (typeof Symbol === "function" && Symbol.iterator) {
+        iterableToArray = function (iterable) {
+            if (iterable == null)
+                throw TypeError("The argument should be iterable instead of null or undefined.");
+
+            // Check that if `iterable` is Iterable.
+            // Excepting Array, string or arguments because slice is quicker for them.
+            if (typeof iterable[Symbol.iterator] === "function"
+                // Optimization for Array, string and arguments 
+                && !(iterable instanceof Array
+                    || (typeof Array.isArray === "function" && Array.isArray(iterable))
+                    || typeof iterable === "string" || iterable instanceof String
+                    || typeof iterable.constructor === arguments.constructor
+                )
+            ) {
+                var result = [];
+                var iterator = iterable[Symbol]();
+                var iteratorReturn;
+                while (!((iteratorReturn = iterator).done))
+                    result.push(iteratorReturn.value);
+
+                return result;
+            }
+            else {
+                return Array.prototype.slice.apply(iterable);
+            }
         }
     }
-}
-
-/**
- * 
- * @param {any} arg0
- * @param {IArguments | any[]} argArray 
- * @returns {any[]} 
- */
-function prependArguments(arg0, argArray) {
-    var argCount = argArray.length;
-    var newArgArray = new Array(argCount + 1);
-
-    newArgArray[0] = arg0;
-    for (var i = 0; i < argCount; ++i)
-        newArgArray[i + 1] = argArray[i];
-
-    return newArgArray;
-}
-
-
-/**
- * Convert an iterable object to an array.
- * 
- * See https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols.
- * 
- * @function
- * @type {(iterable: Interable) => Array}
- * 
- * @throws {TypeError}  when the argument is not iterable.
- */
-var iterableToArray;
-
-// ES6 with Array.from
-if (Array.from) {
-    iterableToArray = Array.from;
-}
-// Incomplete ES6. Iterable exists but Array.from is not implemented.
-else if (typeof Symbol === "function" && Symbol.iterator) {
-    iterableToArray = function (iterable) {
-        if (iterable == null)
-            throw TypeError("The argument should be iterable instead of null or undefined.");
-
-        // Check that if `iterable` is Iterable.
-        // Excepting Array, string or arguments because slice is quicker for them.
-        if (typeof iterable[Symbol.iterator] === "function"
-            // Optimization for Array, string and arguments 
-            && !(iterable instanceof Array
-                || (typeof Array.isArray === "function" && Array.isArray(iterable))
-                || typeof iterable === "string" || iterable instanceof String
-                || typeof iterable.constructor === arguments.constructor
-            )
-        ) {
-            var result = [];
-            var iterator = iterable[Symbol]();
-            var iteratorReturn;
-            while (!((iteratorReturn = iterator).done))
-                result.push(iteratorReturn.value);
-
-            return result;
-        }
-        else {
+    // Before ES6, no `Iterable`.
+    else {
+        iterableToArray = function (iterable) {
             return Array.prototype.slice.apply(iterable);
         }
     }
-}
-// Before ES6, no `Iterable`.
-else {
-    iterableToArray = function (iterable) {
-        return Array.prototype.slice.apply(iterable);
+
+    /**
+     * Return an array filled by `value`.
+     * 
+     * @param {T} value
+     * @param {number} length
+     * @returns {T[]}
+     */
+    function arrayFilledWith(value, length) {
+        var array = new Array(length);
+
+        if (array.fill)
+            array.fill(value);
+        else
+            for (var i = 0; i < length; ++i)
+                array[i] = value;
+
+        return array;
     }
-}
-
-/**
- * Return an array filled by `value`.
- * 
- * @param {T} value
- * @param {number} length
- * @returns {T[]}
- */
-function arrayFilledWith(value, length) {
-    var array = new Array(length);
-
-    if (array.fill)
-        array.fill(value);
-    else
-        for (var i = 0; i < length; ++i)
-            array[i] = value;
-
-    return array;
-}
 
 
 
@@ -964,11 +978,11 @@ function arrayFilledWith(value, length) {
 
 
 
-/* Export */
+    /* Export */
 
-return {
-    Promise: Promise,
-    AggregateError: AggregateError
-};
+    return {
+        Promise: Promise,
+        AggregateError: AggregateError
+    };
 
-}) ());
+})());
