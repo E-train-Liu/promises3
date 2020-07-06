@@ -6,22 +6,20 @@
  * @license MIT
  */
 
-(function (definations) {
+(function (_Promise) {
 
     // CommonJS
     if (typeof module === "object" && module !== null)
-        module.exports = definations;
+        module.exports = _Promise;
     // AMD and CMD
     else if (typeof define === "function" && (define.amd || define.cmd))
         define(function () {
-            return definations;
+            return _Promise;
         });
     // Simply Polyfill
     else {
         if (typeof Promise === "undefined")
-            Promise = definations.Promise;
-        if (typeof AggregateError === "undefined")
-            AggregateError = definations.AggregateError;
+            Promise = _Promise;
     }
 
 })((function () {
@@ -73,68 +71,6 @@
         }
         catch (error) {
             once.reject(error);
-        }
-    }
-
-
-    if (typeof AggregateError !== "function") {
-
-        /**
-         * @type {boolean}
-         */
-        var definePropertyUsable;
-        try {
-            Object.defineProperty(new Error(), "test", {
-                get: function () { return [] },
-                configurable: true,
-                enumerable: false,
-                writable: true
-            });
-            definePropertyUsable = true;
-        }
-        catch (error) {
-            definePropertyUsable = false;
-        }
-
-        /**
-         * A bundle of multiple `Error`.
-         * 
-         * An experimental class,
-         * see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError.
-         * 
-         * @class
-         * 
-         * @param {Interable} errors  An a interable of errors.
-         * @param {string} [message=""]  The message describing the error. Be `""` on default.
-         */
-        function AggregateError(errors, message) {
-            Error.call(this, message);
-
-            var errorArray = iterableToArray(errors);
-
-            if (definePropertyUsable)
-                Object.defineProperty(this, "[[errors]]", {
-                    value: errorArray,
-                    configurable: false,
-                    enumerable: false,
-                    writable: false
-                });
-            else {
-                this.errors = errorArray;
-            }
-        }
-        AggregateError.prototype = new Error();
-        AggregateError.prototype.constructor = AggregateError;
-
-        if (definePropertyUsable) {
-            Object.defineProperty(AggregateError.prototype, "errors", {
-                get: function () {
-                    return this["[[errors]]"].slice();
-                },
-                configurable: true,
-                enumerable: false,
-                writable: true
-            });
         }
     }
 
@@ -240,23 +176,6 @@
         var promiseArray = iterableToArray(promises);
         return new Promise(
             curry(allSettledExecutor, promiseArray)
-        );
-    }
-
-    /**
-     * Take an iterable consist of `Promise`, `Thenable` or value.
-     * Return a single `Promise`.
-     * 
-     * The returned `Promise` will be fulfilled when any of the input is fulfilled 
-     * and will be rejected if all of the inputs are rejected.
-     * 
-     * @param {Iterable} promises
-     * @returns {Promise}
-     */
-    Promise.any = function (promises) {
-        var promiseArray = iterableToArray(promises);
-        return new Promise(
-            curry(anyExecutor, promiseArray)
         );
     }
 
@@ -669,37 +588,6 @@
     }
 
     /**
-     * The executor to create the promise returned by `Promise.any()`.
-     * 
-     * @param {any[]} promiseArray 
-     * @param {(value: any) => void} resolve 
-     * @param {(reason: AggregateError) => void} reject 
-     */
-    function anyExecutor(promiseArray, resolve, reject) {
-        var unrejectedCount = promiseArray.length;
-        var reasons = new Array(promiseArray.length);
-        var fulfilled = false;
-
-        if (unrejectedCount === 0) {
-            reject(new AggregateError(reasons));
-            return;
-        }
-
-        function onFulfilledAt(index, value) {
-            if (!fulfilled) {
-                fulfilled = true;
-                invokeFunctionAsync(resolve, value);
-            }
-        }
-        function onRejectedAt(index, reason) {
-            reasons[index] = reason;
-            if (--unrejectedCount <= 0)
-                invokeFunctionAsync(reject, new AggregateError(reasons));
-        }
-        watchPromiseArray(onFulfilledAt, onRejectedAt);
-    }
-
-    /**
      * The executor to create the promise returned by `Promise.race()`.
      * 
      * @param {any} promiseArray 
@@ -980,9 +868,6 @@
 
     /* Export */
 
-    return {
-        Promise: Promise,
-        AggregateError: AggregateError
-    };
+    return Promise;
 
 })());

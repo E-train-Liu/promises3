@@ -3,11 +3,11 @@
  */
 
 
-const promises3 = require("../../../Promise.js");
+const PromisEs3 = require("../../../Promise.js");
 
 function deferred() {
     let resolve, reject;
-    let promise = new promises3.Promise(
+    let promise = new PromisEs3(
         function (_resolve, _reject) {
             resolve = _resolve;
             reject = _reject;
@@ -22,7 +22,7 @@ function deferred() {
 }
 
 module.exports = {
-    resolved: promises3.Promise.resolve,
-    rejected: promises3.Promise.reject,
+    resolved: PromisEs3.resolve,
+    rejected: PromisEs3.reject,
     deferred: deferred
 };
